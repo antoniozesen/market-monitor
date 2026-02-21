@@ -51,6 +51,7 @@ It provides:
 4. Save.
 
 ### 5) Troubleshooting
+- If Streamlit says the app file is missing, set **Main file path** to `app.py` (or use `streamlit_app.py` compatibility entrypoint).
 - If macro panels are empty: confirm `FRED_API_KEY` is set exactly in Secrets.
 - If some ETFs are missing: Yahoo may have intermittent outages; retry/redeploy.
 - If history is short for an ETF: app degrades gracefully and flags warnings.

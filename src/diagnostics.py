@@ -12,7 +12,7 @@ def panel_stats(df: pd.DataFrame) -> dict:
         "rows": int(df.shape[0]),
         "cols": int(df.shape[1]),
         "missing_pct": float(df.isna().mean().mean() * 100),
-        "last_date": str(df.index.max().date()) if hasattr(df.index, "max") and len(df.index) > 0 else "n/a",
+        "last_date": str(df.index.max().date()) if len(df.index) > 0 else "n/a",
     }
 
 
@@ -25,46 +25,26 @@ def stale_summary(meta: pd.DataFrame, stale_days: int = 60) -> dict:
 
 def missing_checklist(meta: pd.DataFrame, yf_missing: list[str], regime_available: bool, curve_available: bool) -> pd.DataFrame:
     rows: list[dict] = []
-
     present = set(meta["series_id"].dropna().astype(str).tolist()) if not meta.empty and "series_id" in meta.columns else set()
     for region, concepts in FRED_CANDIDATES.items():
         for concept, ids in concepts.items():
             hit = any(i in present for i in ids)
-            rows.append(
-                {
-                    "type": "macro",
-                    "region": region,
-                    "item": f"{concept}",
-                    "status": "OK" if hit else "MISSING",
-                    "what_to_share": "Provide alternative FRED series id(s) for this concept" if not hit else "",
-                }
-            )
-
+            rows.append({
+                "type": "macro",
+                "region": region,
+                "item": concept,
+                "status": "OK" if hit else "MISSING",
+                "what_to_share": "Provide alternative FRED IDs for this concept" if not hit else "",
+            })
     for t in yf_missing:
-        rows.append({
-            "type": "market",
-            "region": "global",
-            "item": t,
-            "status": "MISSING",
-            "what_to_share": "Ticker unavailable in yfinance for selected period; share replacement ETF if needed",
-        })
+        rows.append({"type": "market", "region": "global", "item": t, "status": "MISSING", "what_to_share": "Ticker missing in yfinance period"})
+    rows.append({"type": "engine", "region": "global", "item": "regime_model", "status": "OK" if regime_available else "MISSING", "what_to_share": "Need effective monthly sample >= minimum"})
+    rows.append({"type": "engine", "region": "US", "item": "curve_2y_10y_slope", "status": "OK" if curve_available else "MISSING", "what_to_share": "Need DGS2 and DGS10"})
+    return pd.DataFrame(rows)
 
-    rows.append({
-        "type": "engine",
-        "region": "global",
-        "item": "regime_model",
-        "status": "OK" if regime_available else "MISSING",
-        "what_to_share": "Need more usable macro history or additional monthly series" if not regime_available else "",
-    })
-    rows.append({
-        "type": "engine",
-        "region": "US",
-        "item": "curve_2y_10y_slope",
-        "status": "OK" if curve_available else "MISSING",
-        "what_to_share": "Need FRED DGS2 and DGS10 (or valid substitutes)",
-    })
 
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    return out.sort_values(["status", "type", "region", "item"], ascending=[True, True, True, True]).reset_index(drop=True)
+def data_quality_summary(meta: pd.DataFrame) -> pd.DataFrame:
+    if meta.empty:
+        return pd.DataFrame(columns=["region", "concept", "usable"])
+    g = meta.assign(usable=lambda x: x["series_id"].astype(str).str.len() > 0).groupby(["region", "concept"], dropna=False)["usable"].max().reset_index()
+    return g

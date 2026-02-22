@@ -12,6 +12,13 @@ from src.config import FRED_CANDIDATES, FRED_SEARCH
 
 @dataclass
 class MetaRow:
+    concept: str
+    region: str
+    series_id: str
+    title: str
+    units: str
+    frequency: str
+    transformation: str
     indicator: str
     region: str
     series_id: str
@@ -23,13 +30,36 @@ class MetaRow:
     missingness_pct: float
     source_mode: str
     excluded_reason: str
+    selection_why: str
 
 
-def _score(row: pd.Series, keywords: list[str]) -> float:
-    title = str(row.get("title", "")).lower()
-    k = sum(int(w in title) for w in keywords)
-    freq = 2 if str(row.get("frequency", "")).lower() == "monthly" else 0
-    return float(k + freq)
+def _score_candidate(meta_row: pd.Series, keywords: list[str], staleness_days: int, missingness: float, history: int) -> float:
+    title = str(meta_row.get("title", "")).lower()
+    freq = str(meta_row.get("frequency", "")).lower()
+    f_score = 30 if "month" in freq else (15 if "week" in freq else 0)
+    kw_score = sum(int(k in title) for k in keywords) * 4
+    stale_pen = -40 if staleness_days > 120 else 0
+    stale_pen += -80 if staleness_days > 365 else 0
+    miss_pen = -min(30.0, missingness * 100)
+    hist_score = min(20, history // 24)
+    return float(f_score + kw_score + stale_pen + miss_pen + hist_score)
+
+
+def _series_meta(fred: Fred, sid: str) -> pd.Series:
+    info = fred.get_series_info(sid)
+    return info if info is not None else pd.Series(dtype=object)
+
+
+def _try_series(fred: Fred, sid: str) -> tuple[pd.Series | None, pd.Series]:
+    try:
+        s = fred.get_series(sid)
+        if s is None:
+            return None, pd.Series(dtype=object)
+        s = pd.Series(s).dropna()
+        s.index = pd.to_datetime(s.index)
+        return s, _series_meta(fred, sid)
+    except Exception:
+        return None, pd.Series(dtype=object)
 
 
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
@@ -38,77 +68,84 @@ def get_macro_library() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     if not key:
         return pd.DataFrame(), pd.DataFrame(), {"warnings": ["Missing FRED_API_KEY in Streamlit secrets"]}
 
+    cfg = Settings()
     fred = Fred(api_key=key)
-    series_list: list[pd.Series] = []
-    meta: list[dict] = []
-    warns: list[str] = []
+    panel: list[pd.Series] = []
+    meta_rows: list[dict] = []
+    warnings: list[str] = []
+    dropped_for_quality: list[str] = []
 
     for region, concepts in FRED_CANDIDATES.items():
-        for indicator, candidates in concepts.items():
-            sid, data, mode, ex = None, None, "candidate", ""
-            for c in candidates:
-                try:
-                    s = fred.get_series(c)
-                    if s is not None and s.dropna().shape[0] >= 24:
-                        sid, data = c, s
-                        break
-                except Exception:
-                    continue
-            if sid is None and region in FRED_SEARCH and indicator in FRED_SEARCH[region]:
-                mode = "search_fallback"
-                kws = FRED_SEARCH[region][indicator]
-                best = None
-                best_score = -1.0
-                for kw in kws:
+        for concept, candidates in concepts.items():
+            best = None
+            best_score = -1e9
+            mode = "candidate"
+            keywords = [region.lower(), concept.lower(), "monthly"]
+
+            candidate_pool = list(candidates)
+            if region in FRED_SEARCH and concept in FRED_SEARCH[region]:
+                for query in FRED_SEARCH[region][concept]:
                     try:
-                        r = fred.search(kw)
-                        if r.empty:
-                            continue
-                        r = r.copy()
-                        r["score"] = r.apply(lambda x: _score(x, kws), axis=1)
-                        top = r.sort_values("score", ascending=False).iloc[0]
-                        if float(top["score"]) > best_score:
-                            best = top
-                            best_score = float(top["score"])
+                        sr = fred.search(query)
+                        if sr is not None and not sr.empty:
+                            candidate_pool.extend(sr.head(15)["id"].astype(str).tolist())
                     except Exception:
                         continue
-                if best is not None:
-                    sid = str(best["id"])
-                    try:
-                        data = fred.get_series(sid)
-                    except Exception:
-                        sid = None
 
-            if sid is None or data is None:
-                warns.append(f"No usable series: {region}-{indicator}")
-                ex = "candidate+search failed"
-                meta.append(asdict(MetaRow(indicator, region, "", "", "", "", "", -1, 100.0, mode, ex)))
+            seen = set()
+            for sid in candidate_pool:
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                s, info = _try_series(fred, sid)
+                if s is None or s.empty:
+                    continue
+
+                last = s.index.max()
+                stale = (dt.date.today() - last.date()).days
+                missingness = float(1 - (s.shape[0] / max(1, len(pd.date_range(s.index.min(), s.index.max(), freq="M")))))
+                score = _score_candidate(info, keywords, stale, missingness, s.shape[0])
+                if score > best_score:
+                    best_score = score
+                    best = (sid, s, info, stale, missingness)
+
+            if best is None:
+                warnings.append(f"No usable series: {region}-{concept}")
+                meta_rows.append(asdict(MetaRow(concept, region, "", "", "", "", TRANSFORM_RULES.get(concept, ""), "", -1, 100.0, "search_fallback", "candidate+search failed", "none")))
                 continue
 
-            s = pd.Series(data).dropna()
-            s.index = pd.to_datetime(s.index)
-            name = f"{region}_{indicator}"
-            s.name = name
-            series_list.append(s)
+            sid, s, info, stale, missingness = best
+            mode = "candidate" if sid in candidates else "search_fallback"
+            if stale > cfg.severe_stale_days:
+                dropped_for_quality.append(f"{region}-{concept}:{sid}")
 
-            last = s.index.max()
-            meta.append(
+            s.name = f"{region}_{concept}"
+            panel.append(s)
+
+            title = str(info.get("title", ""))
+            units = str(info.get("units", ""))
+            freq = str(info.get("frequency", ""))
+            why = f"score={best_score:.1f}; stale={stale}d; missing={missingness:.1%}; hist={s.shape[0]}"
+
+            meta_rows.append(
                 asdict(
                     MetaRow(
-                        indicator=indicator,
+                        concept=concept,
                         region=region,
                         series_id=sid,
-                        transformation="YoY for level series; z-score for model",
-                        frequency="Monthly",
-                        units="rate/index",
-                        last_obs_date=str(last.date()),
-                        staleness_days=(dt.date.today() - last.date()).days,
-                        missingness_pct=float(s.isna().mean() * 100),
+                        title=title,
+                        units=units,
+                        frequency=freq,
+                        transformation=TRANSFORM_RULES.get(concept, "level_z"),
+                        last_obs_date=str(s.index.max().date()),
+                        staleness_days=int(stale),
+                        missingness_pct=float(missingness * 100),
                         source_mode=mode,
-                        excluded_reason="",
+                        excluded_reason="stale>365d" if stale > cfg.severe_stale_days else "",
+                        selection_why=why,
                     )
                 )
             )
 
-    panel = pd.concat(series_list, axis=1).sort_index() if series_list else pd.DataFrame()
-    return panel, pd.DataFrame(meta), {"warnings": warns}
+    macro = pd.concat(panel, axis=1).sort_index() if panel else pd.DataFrame()
+    return macro, pd.DataFrame(meta_rows), {"warnings": warnings, "dropped_for_quality": dropped_for_quality}

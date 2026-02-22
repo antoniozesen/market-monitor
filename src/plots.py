@@ -23,13 +23,13 @@ def curve_schema(macro: pd.DataFrame) -> pd.DataFrame:
 
 def fig_curve(curve: pd.DataFrame) -> go.Figure:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    if "2Y" in curve.columns:
+    if "2Y" in curve.columns and not curve["2Y"].dropna().empty:
         fig.add_trace(go.Scatter(x=curve.index, y=curve["2Y"], name="2Y"), secondary_y=False)
-    if "10Y" in curve.columns:
+    if "10Y" in curve.columns and not curve["10Y"].dropna().empty:
         fig.add_trace(go.Scatter(x=curve.index, y=curve["10Y"], name="10Y"), secondary_y=False)
-    if "Slope" in curve.columns:
+    if "Slope" in curve.columns and not curve["Slope"].dropna().empty:
         fig.add_trace(go.Scatter(x=curve.index, y=curve["Slope"], name="Slope"), secondary_y=True)
-    fig.update_layout(title="US Curve (2Y/10Y) and Slope")
+    fig.update_layout(title="US Curve (2Y/10Y/Slope)")
     return fig
 
 

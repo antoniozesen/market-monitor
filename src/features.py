@@ -1,52 +1,45 @@
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from src.utils import robust_zscore
 
 
-def build_monthly_macro_features(fred_df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
-    if fred_df.empty:
-        return pd.DataFrame(), {}
-    m = fred_df.resample("M").last()
+def build_regime_features(macro: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    if macro.empty:
+        return pd.DataFrame(), {"reason": "macro empty"}
+
+    m = macro.resample("M").last()
     yoy = m.pct_change(12)
 
-    growth = yoy.filter(regex="growth|INDPRO").mean(axis=1)
-    inflation = yoy.filter(regex="inflation|CPILFESL").mean(axis=1)
+    growth = yoy.filter(regex="growth|INDPRO|PAYEMS|HOUST|leading").mean(axis=1)
+    inflation = yoy.filter(regex="inflation|CPI|PCE").mean(axis=1)
     labor = yoy.filter(regex="labor|UNRATE|ICSA").mean(axis=1)
-    conditions = m.filter(regex="conditions|NFCI|BAA10YM|VIXCLS").mean(axis=1)
+    stress = m.filter(regex="conditions|NFCI|BAA10YM|VIXCLS").mean(axis=1)
+    real_rate = m.filter(regex="DFII10").mean(axis=1)
+    slope = m.filter(regex="DGS10").mean(axis=1) - m.filter(regex="DGS2").mean(axis=1)
 
-    features = pd.DataFrame(
+    feats = pd.DataFrame(
         {
             "growth_z": robust_zscore(growth),
             "inflation_z": robust_zscore(inflation),
             "labor_z": robust_zscore(labor),
-            "conditions_z": robust_zscore(conditions),
+            "stress_z": robust_zscore(stress),
+            "real_rate_z": robust_zscore(real_rate),
+            "slope_z": robust_zscore(slope),
         }
     )
-    if "US_rates" in m.columns:
-        features["real_rate_z"] = robust_zscore(m["US_rates"])
-    # deterministic slope proxy from available columns
-    d10 = m.filter(regex="DGS10").mean(axis=1)
-    d2 = m.filter(regex="DGS2").mean(axis=1)
-    if not d10.empty and not d2.empty:
-        features["slope_z"] = robust_zscore(d10 - d2)
-
-    audit = {
-        "winsorization": "1% tails",
-        "robust_scaling": "median/MAD",
-        "effective_sample": str(int(features.dropna().shape[0])),
-    }
-    return features.dropna(how="all"), audit
+    return feats, {"sample_rows": int(feats.dropna(how="all").shape[0]), "missing_pct": float(feats.isna().mean().mean() * 100)}
 
 
-def regime_conditioned_mu(monthly_returns: pd.DataFrame, probs: pd.DataFrame, shrink: float = 0.6) -> pd.DataFrame:
+def regime_expected_returns(monthly_returns: pd.DataFrame, probs: pd.DataFrame, shrinkage: float = 0.6) -> pd.DataFrame:
+    if monthly_returns.empty or probs.empty:
+        return pd.DataFrame()
+    mu_lr = monthly_returns.mean()
     out = {}
-    long_run = monthly_returns.mean()
-    for regime in probs.columns:
-        w = probs[regime].reindex(monthly_returns.index).fillna(0)
+    for r in probs.columns:
+        w = probs[r].reindex(monthly_returns.index).fillna(0)
         den = w.sum()
-        cond = (monthly_returns.mul(w, axis=0).sum() / den) if den > 0 else long_run
-        out[regime] = (1 - shrink) * cond + shrink * long_run
+        mu_r = (monthly_returns.mul(w, axis=0).sum() / den) if den > 0 else mu_lr
+        out[r] = (1 - shrinkage) * mu_r + shrinkage * mu_lr
     return pd.DataFrame(out)

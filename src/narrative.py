@@ -3,28 +3,26 @@ from __future__ import annotations
 import pandas as pd
 
 
-def build_takeaways_regime(current_regime: str, probs: pd.Series, drivers: pd.Series) -> list[str]:
-    top = probs.sort_values(ascending=False).head(2)
+def committee_text(regime: str, stress_z: float, top_assets: list[str], weak_assets: list[str], top_w: list[str]) -> str:
+    return (
+        f"Regime assessment: {regime}. Stress z-score at {stress_z:.2f}. "
+        f"Signal leaders: {', '.join(top_assets) if top_assets else 'n/a'}; laggards: {', '.join(weak_assets) if weak_assets else 'n/a'}. "
+        f"Portfolio overweights: {', '.join(top_w) if top_w else 'n/a'}."
+    )
+
+
+def banker_text(regime: str, top_w: list[str]) -> str:
+    return (
+        f"Hoy leemos el mercado como {regime}. Mantenemos cartera diversificada y ajustamos riesgo de forma prudente. "
+        f"Ahora pesan más: {', '.join(top_w) if top_w else 'n/a'}."
+    )
+
+
+def allocation_takeaways(weights: pd.Series, reason: str, hyg_flag: bool) -> list[str]:
+    if weights.empty:
+        return ["No allocation available.", "Fallback used.", f"Reason: {reason}."]
     return [
-        f"Current dominant regime is {current_regime} with probability {top.iloc[0]:.1%}.",
-        f"Second regime risk is {top.index[1]} at {top.iloc[1]:.1%}.",
-        f"Growth z-score is {drivers.get('growth_z', 0):.2f} and inflation z-score is {drivers.get('inflation_z', 0):.2f}.",
+        f"Top weight is {weights.idxmax()} at {weights.max():.1%}.",
+        f"Allocation mode: {reason}.",
+        f"Defensive HY cap active: {'Yes' if hyg_flag else 'No'}.",
     ]
-
-
-def build_committee_text(regime: str, signal_table: pd.DataFrame, alloc: pd.Series) -> str:
-    best = signal_table.head(3)["ticker"].tolist() if not signal_table.empty else []
-    worst = signal_table.tail(3)["ticker"].tolist() if not signal_table.empty else []
-    top_w = alloc.sort_values(ascending=False).head(5)
-    return (
-        f"Regime assessment: {regime}. Leading indicators and financial conditions imply disciplined risk budgeting. "
-        f"Preferred exposures by signal strength: {', '.join(best)}; weak tails: {', '.join(worst)}. "
-        f"Portfolio implementation overweights {', '.join(top_w.index.tolist())} with explicit drawdown/turnover controls."
-    )
-
-
-def build_banker_text(regime: str, alloc: pd.Series) -> str:
-    return (
-        f"Today we read markets as {regime}. We keep diversification first, add risk where momentum is healthy, "
-        f"and cap fragile credit when stress rises. Largest allocations now: {', '.join(alloc.sort_values(ascending=False).head(3).index.tolist())}."
-    )

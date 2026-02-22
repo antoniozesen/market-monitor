@@ -5,83 +5,127 @@ import pandas as pd
 from scipy.optimize import minimize
 from sklearn.covariance import LedoitWolf
 
-from src.config import ANCHOR_PROFILES, BUCKET_MAP
+from src.config import Settings
+from src.universe import ANCHOR_PROFILES, BUCKET_MAP
+from src.risk import fallback_covariance, sanitize_returns
 
 
 def benchmark_60_40(monthly_ret: pd.DataFrame) -> pd.Series:
+    if not {"SPY", "IEF"}.issubset(monthly_ret.columns):
+        return pd.Series(dtype=float)
     r = monthly_ret[["SPY", "IEF"]].dropna()
     return 0.6 * r["SPY"] + 0.4 * r["IEF"]
 
 
-def optimize_allocation(
-    monthly_ret: pd.DataFrame,
-    mu: pd.Series,
-    profile: str,
-    flexibility: float,
-    stress_z: float,
-    regime_name: str,
-) -> dict:
-    cols = [c for c in monthly_ret.columns if c in mu.index]
-    r = monthly_ret[cols].dropna()
-    x0 = np.repeat(1 / len(cols), len(cols))
+def optimize_weights(monthly_ret: pd.DataFrame, mu: pd.Series, profile: str, flexibility: float, stress_z: float, regime_name: str) -> dict:
+    cfg = Settings()
+    clean, diag = sanitize_returns(monthly_ret, cfg.min_obs_per_asset, cfg.min_rows_for_cov, cfg.min_assets_for_opt)
 
-    lw = LedoitWolf().fit(r.values)
-    cov = lw.covariance_
-    anchor_bucket = ANCHOR_PROFILES[profile]
-    anchor = np.zeros(len(cols))
-    for i, t in enumerate(cols):
-        for b, members in BUCKET_MAP.items():
-            if t in members:
-                anchor[i] = anchor_bucket[b] / len([m for m in members if m in cols])
+    cols = [c for c in clean.columns if c in mu.index]
+    clean = clean[cols]
+    if clean.shape[1] < cfg.min_assets_for_opt or clean.shape[0] < 12:
+        return fallback_anchor(profile, cols, "insufficient clean returns for optimization", diag)
 
-    hyg_idx = cols.index("HYG") if "HYG" in cols else None
+    if diag["can_cov"]:
+        try:
+            cov = pd.DataFrame(LedoitWolf().fit(clean.values).covariance_, index=clean.columns, columns=clean.columns)
+            cov_mode = "LedoitWolf"
+        except Exception:
+            cov = fallback_covariance(clean)
+            cov_mode = "sample+ridgeterm"
+    else:
+        cov = fallback_covariance(clean)
+        cov_mode = "sample+ridgeterm"
+
+    anchor = _anchor_vector(clean.columns.tolist(), profile)
+    x0 = np.array(anchor.values)
+
     hyg_cap = 0.05 if (stress_z > 0.5 or regime_name in ["Slowdown", "Stagflation"]) else 0.25
+    bounds = [(0.0, 0.25) for _ in clean.columns]
+    if "HYG" in clean.columns:
+        bounds[list(clean.columns).index("HYG")] = (0.0, hyg_cap)
 
-    bounds = [(0, 0.25) for _ in cols]
-    if hyg_idx is not None:
-        bounds[hyg_idx] = (0, hyg_cap)
+    def bucket_sum(x: np.ndarray, bucket: str) -> float:
+        idx = [i for i, t in enumerate(clean.columns) if t in BUCKET_MAP[bucket]]
+        return float(x[idx].sum())
 
-    def bucket_constraint(x, bucket):
-        idx = [i for i, t in enumerate(cols) if t in BUCKET_MAP[bucket]]
-        return x[idx].sum()
+    constraints = [{"type": "eq", "fun": lambda x: x.sum() - 1}]
+    for b, target in ANCHOR_PROFILES[profile].items():
+        constraints.append({"type": "ineq", "fun": lambda x, b=b, target=target: bucket_sum(x, b) - max(0, target - flexibility)})
+        constraints.append({"type": "ineq", "fun": lambda x, b=b, target=target: min(1, target + flexibility) - bucket_sum(x, b)})
 
-    cons = [{"type": "eq", "fun": lambda x: x.sum() - 1}]
-    for b, w in anchor_bucket.items():
-        cons += [
-            {"type": "ineq", "fun": lambda x, b=b, w=w: bucket_constraint(x, b) - max(0, w - flexibility)},
-            {"type": "ineq", "fun": lambda x, b=b, w=w: min(1, w + flexibility) - bucket_constraint(x, b)},
-        ]
+    mu_v = mu.reindex(clean.columns).fillna(mu.mean()).values
 
-    mu_v = mu[cols].fillna(mu.mean()).values
+    def obj(x: np.ndarray) -> float:
+        p_ret = x @ mu_v
+        p_var = x @ cov.values @ x
+        p_cvar = np.percentile(-(clean.values @ x), 95)
+        ridge = np.sum((x - anchor.values) ** 2)
+        turn = np.sum(np.abs(x - anchor.values))
+        return -(p_ret - 3 * p_var - 0.4 * p_cvar - 0.5 * ridge - 0.1 * turn)
 
-    def objective(x):
-        ret = x @ mu_v
-        var = x @ cov @ x
-        ridge = np.sum((x - anchor) ** 2)
-        cvar_proxy = np.percentile(-(r.values @ x), 95)
-        turn = np.sum(np.abs(x - anchor))
-        return -(ret - 3 * var - 0.5 * cvar_proxy - 0.5 * ridge - 0.1 * turn)
+    try:
+        res = minimize(obj, x0, method="SLSQP", bounds=bounds, constraints=constraints)
+        w = pd.Series(res.x if res.success else anchor.values, index=clean.columns)
+        reason = "optimized" if res.success else f"solver fallback: {res.message}"
+    except Exception as exc:
+        return fallback_anchor(profile, clean.columns.tolist(), f"optimization exception: {exc}", diag)
 
-    res = minimize(objective, x0, method="SLSQP", bounds=bounds, constraints=cons)
-    w = pd.Series(res.x if res.success else anchor, index=cols)
-    turnover = float(np.sum(np.abs(w.values - anchor)))
-    tc_impact = turnover * 0.001
+    turnover = float(np.abs(w - anchor).sum())
     return {
         "weights": w,
-        "success": bool(res.success),
-        "message": res.message,
+        "anchor": anchor,
         "turnover": turnover,
         "annual_turnover": turnover * 12,
-        "tc_impact": tc_impact,
+        "tx_cost": turnover * 0.001,
         "hyg_cap_triggered": hyg_cap <= 0.05,
+        "reason": reason,
+        "cov_mode": cov_mode,
+        "diag": diag,
+        "cov": cov,
     }
 
 
-def stress_flip_table(weights: pd.Series, regime_mu: pd.DataFrame, cov: pd.DataFrame) -> pd.DataFrame:
+def fallback_anchor(profile: str, cols: list[str], reason: str, diag: dict) -> dict:
+    anchor = _anchor_vector(cols, profile)
+    return {
+        "weights": anchor.copy(),
+        "anchor": anchor,
+        "turnover": 0.0,
+        "annual_turnover": 0.0,
+        "tx_cost": 0.0,
+        "hyg_cap_triggered": False,
+        "reason": reason,
+        "cov_mode": "fallback",
+        "diag": diag,
+        "cov": pd.DataFrame(),
+    }
+
+
+def _anchor_vector(cols: list[str], profile: str) -> pd.Series:
+    v = pd.Series(0.0, index=cols)
+    for bucket, target in ANCHOR_PROFILES[profile].items():
+        bucket_cols = [c for c in cols if c in BUCKET_MAP[bucket]]
+        if bucket_cols:
+            v[bucket_cols] = target / len(bucket_cols)
+    s = v.sum()
+    return (v / s) if s > 0 else v
+
+
+def stress_scenarios(weights: pd.Series, regime_mu: pd.DataFrame, cov: pd.DataFrame) -> pd.DataFrame:
+    if weights.empty:
+        return pd.DataFrame()
     rows = []
-    for regime in ["Current", "Goldilocks", "Reflation", "Slowdown", "Stagflation"]:
-        m = regime_mu.mean(axis=1) if regime == "Current" else regime_mu.get(regime, regime_mu.mean(axis=1))
-        mu_p = float(weights.reindex(m.index).fillna(0).dot(m))
-        vol = float(np.sqrt(weights.reindex(cov.index).fillna(0).values @ cov.values @ weights.reindex(cov.index).fillna(0).values))
-        rows.append({"Scenario": regime, "Exp Return (m)": mu_p, "Vol (m)": vol})
+    names = ["Current", "Goldilocks", "Reflation", "Slowdown", "Stagflation"]
+    for n in names:
+        mu = regime_mu.mean(axis=1) if (regime_mu.empty or n == "Current") else regime_mu.get(n, regime_mu.mean(axis=1))
+        mu = mu if isinstance(mu, pd.Series) else pd.Series(dtype=float)
+        wp = weights.reindex(mu.index).fillna(0)
+        er = float(wp.dot(mu)) if not mu.empty else 0.0
+        if cov.empty:
+            vol = np.nan
+        else:
+            wc = weights.reindex(cov.index).fillna(0).values
+            vol = float(np.sqrt(wc @ cov.values @ wc))
+        rows.append({"Scenario": n, "Exp Return (m)": er, "Vol (m)": vol})
     return pd.DataFrame(rows)

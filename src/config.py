@@ -2,73 +2,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-ETF_UNIVERSE = {
-    "equity_regions": ["SPY", "VGK", "EWJ", "IEMG", "MCHI"],
-    "us_sectors": ["XLK", "XLF", "XLI", "XLV", "XLP", "XLU", "XLE", "XLB"],
-    "factors": ["QUAL", "MTUM", "USMV", "VLUE", "VUG"],
-    "bonds_credit": ["TLT", "IEF", "LQD", "HYG"],
-    "gold": ["GLD"],
-}
+REGIME_NAMES = ["Goldilocks", "Reflation", "Slowdown", "Stagflation"]
 
-ETF_NAMES = {
-    "SPY": "SPDR S&P 500 ETF Trust",
-    "VGK": "Vanguard FTSE Europe ETF",
-    "EWJ": "iShares MSCI Japan ETF",
-    "IEMG": "iShares Core MSCI Emerging Markets ETF",
-    "MCHI": "iShares MSCI China ETF",
-    "XLK": "Technology Select Sector SPDR Fund",
-    "XLF": "Financial Select Sector SPDR Fund",
-    "XLI": "Industrial Select Sector SPDR Fund",
-    "XLV": "Health Care Select Sector SPDR Fund",
-    "XLP": "Consumer Staples Select Sector SPDR Fund",
-    "XLU": "Utilities Select Sector SPDR Fund",
-    "XLE": "Energy Select Sector SPDR Fund",
-    "XLB": "Materials Select Sector SPDR Fund",
-    "QUAL": "iShares MSCI USA Quality Factor ETF",
-    "MTUM": "iShares MSCI USA Momentum Factor ETF",
-    "USMV": "iShares MSCI USA Min Vol Factor ETF",
-    "VLUE": "iShares MSCI USA Value Factor ETF",
-    "VUG": "Vanguard Growth ETF",
-    "TLT": "iShares 20+ Year Treasury Bond ETF",
-    "IEF": "iShares 7-10 Year Treasury Bond ETF",
-    "LQD": "iShares iBoxx $ Investment Grade Corporate Bond ETF",
-    "HYG": "iShares iBoxx $ High Yield Corporate Bond ETF",
-    "GLD": "SPDR Gold Shares",
-}
-
-ALL_TICKERS = sum(ETF_UNIVERSE.values(), [])
-
-ANCHOR_PROFILES = {
-    "Conservative": {"Equity": 0.35, "Bonds": 0.55, "Gold": 0.10},
-    "Balanced": {"Equity": 0.50, "Bonds": 0.40, "Gold": 0.10},
-    "Growth": {"Equity": 0.65, "Bonds": 0.25, "Gold": 0.10},
-}
-
-BUCKET_MAP = {
-    "Equity": ETF_UNIVERSE["equity_regions"] + ETF_UNIVERSE["us_sectors"] + ETF_UNIVERSE["factors"],
-    "Bonds": ETF_UNIVERSE["bonds_credit"],
-    "Gold": ETF_UNIVERSE["gold"],
-}
-
-FRED_CORE_SERIES = {
+FRED_CANDIDATES = {
     "US": {
-        "growth": ["INDPRO"],
-        "inflation": ["CPILFESL"],
+        "growth": ["INDPRO", "PAYEMS", "HOUST"],
+        "inflation": ["CPILFESL", "CPIAUCSL", "PCEPILFE", "PCEPI"],
         "labor": ["UNRATE", "ICSA"],
+        "sentiment": ["UMCSENT"],
         "conditions": ["NFCI", "BAA10YM", "VIXCLS"],
-        "rates": ["DFII10", "DGS10", "DGS2"],
+        "rates": ["DGS2", "DGS10", "DFII10"],
     },
     "Europe": {
-        "growth": ["OECDPRINTO01GYSAM", "CLVMNACSCAB1GQEA19"],
+        "growth": ["CLVMNACSCAB1GQEA19", "OECDPRINTO01GYSAM"],
         "inflation": ["CP0000EZ19M086NEST"],
         "labor": ["LRHUTTTTEZM156S"],
         "leading": ["OECDCLI"],
+        "rates": ["IR3TIB01EZM156N"],
     },
     "Japan": {
         "growth": ["JPNPROINDMISMEI"],
         "inflation": ["JPNCPIALLMINMEI"],
         "labor": ["LRUNTTTTJPM156S"],
         "leading": ["JPNLOLITONOSTSAM"],
+        "rates": ["IR3TIB01JPM156N"],
     },
     "EM": {
         "growth": ["OECDPRINTO01GYSAM"],
@@ -76,22 +33,27 @@ FRED_CORE_SERIES = {
     },
 }
 
-SEARCH_KEYWORDS = {
+FRED_SEARCH = {
     "Europe": {
-        "growth": ["euro area industrial production", "euro area cli"],
-        "inflation": ["euro area core cpi", "euro area inflation"],
-        "labor": ["euro area unemployment"],
+        "growth": ["euro area industrial production", "euro area oecd cli"],
+        "inflation": ["euro area cpi core", "euro area inflation"],
+        "labor": ["euro area unemployment rate"],
     },
     "Japan": {
-        "growth": ["japan industrial production", "japan cli"],
+        "growth": ["japan industrial production", "japan oecd cli"],
         "inflation": ["japan cpi"],
-        "labor": ["japan unemployment"],
+        "labor": ["japan unemployment rate"],
+    },
+    "EM": {
+        "growth": ["emerging markets industrial production"],
+        "inflation": ["emerging markets inflation"],
     },
 }
 
 @dataclass
-class AppSettings:
-    monthly_regime_window: int = 240
-    prob_floor: float = 0.02
-    prob_switch_buffer: float = 0.05
+class Settings:
     stale_days: int = 60
+    min_obs_per_asset: int = 24
+    min_rows_for_cov: int = 36
+    min_assets_for_opt: int = 3
+    prob_floor: float = 0.02

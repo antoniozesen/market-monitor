@@ -12,7 +12,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install
-        run: pip install -r requirements.txt
-      - name: Import check
-        run: python -c "import app; print('ok')"
+      - run: pip install -r requirements.txt
+      - name: Import modules
+        run: python -c "import app, src.config, src.data_fred, src.data_yf, src.features, src.regime, src.signals, src.portfolio, src.risk, src.plots, src.narrative, src.diagnostics, src.utils; print('imports ok')"
+      - name: Minimal fake pipeline
+        run: python - <<'PY'
+import numpy as np
+import pandas as pd
+from src.risk import sanitize_returns
+from src.portfolio import optimize_weights
+
+dates = pd.date_range('2020-01-31', periods=50, freq='M')
+cols = ['SPY','IEF','GLD','HYG']
+r = pd.DataFrame(np.random.normal(0.005,0.03,(50,4)), index=dates, columns=cols)
+mu = r.mean()
+clean, diag = sanitize_returns(r)
+res = optimize_weights(clean, mu, 'Balanced', 0.10, 0.2, 'Goldilocks')
+assert 'weights' in res
+print('pipeline ok', diag)
+PY

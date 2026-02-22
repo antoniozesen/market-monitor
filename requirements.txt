@@ -6,4 +6,3 @@ yfinance
 fredapi
 scikit-learn
 scipy
-statsmodels

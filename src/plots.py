@@ -1,30 +1,39 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-def plot_regime_probs(probs: pd.DataFrame) -> go.Figure:
-    fig = px.area(probs, x=probs.index, y=probs.columns, title="Regime probabilities")
-    fig.update_layout(legend_title="Regime", yaxis_tickformat=".0%")
-    return fig
+def curve_schema(macro: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame(index=macro.index if not macro.empty else pd.DatetimeIndex([]), columns=["2Y", "10Y", "Slope"], dtype=float)
+    if macro.empty:
+        return out
+    c2 = [c for c in macro.columns if "DGS2" in c]
+    c10 = [c for c in macro.columns if "DGS10" in c]
+    if c2:
+        out["2Y"] = macro[c2].mean(axis=1)
+    if c10:
+        out["10Y"] = macro[c10].mean(axis=1)
+    out["Slope"] = out["10Y"] - out["2Y"]
+    return out
 
 
-def plot_timeline(state: pd.Series) -> go.Figure:
-    df = state.to_frame("regime")
-    mapper = {k: i for i, k in enumerate(["Goldilocks", "Reflation", "Slowdown", "Stagflation"])}
-    df["code"] = df["regime"].map(mapper)
-    fig = px.scatter(df, x=df.index, y="code", color="regime", title="Regime timeline")
-    fig.update_yaxes(tickvals=list(mapper.values()), ticktext=list(mapper.keys()))
-    return fig
-
-
-def plot_curve_spread(curve_df: pd.DataFrame) -> go.Figure:
+def fig_curve(curve: pd.DataFrame) -> go.Figure:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(go.Scatter(x=curve_df.index, y=curve_df["DGS10"], name="US 10Y"), secondary_y=False)
-    fig.add_trace(go.Scatter(x=curve_df.index, y=curve_df["DGS2"], name="US 2Y"), secondary_y=False)
-    fig.add_trace(go.Scatter(x=curve_df.index, y=curve_df["Slope"], name="10s-2s"), secondary_y=True)
-    fig.update_layout(title="US Curve & Slope")
+    if "2Y" in curve.columns:
+        fig.add_trace(go.Scatter(x=curve.index, y=curve["2Y"], name="2Y"), secondary_y=False)
+    if "10Y" in curve.columns:
+        fig.add_trace(go.Scatter(x=curve.index, y=curve["10Y"], name="10Y"), secondary_y=False)
+    if "Slope" in curve.columns:
+        fig.add_trace(go.Scatter(x=curve.index, y=curve["Slope"], name="Slope"), secondary_y=True)
+    fig.update_layout(title="US Curve (2Y/10Y) and Slope")
     return fig
+
+
+def fig_heatmap(df: pd.DataFrame, title: str):
+    if df.empty:
+        return px.imshow(np.zeros((1, 1)), title=title)
+    return px.imshow(df, aspect="auto", title=title)

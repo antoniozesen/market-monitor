@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, asdict
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 from fredapi import Fred
 
-from src.config import FRED_CANDIDATES, FRED_SEARCH, Settings, TRANSFORM_RULES
+from src.config import FRED_CANDIDATES, FRED_SEARCH
 
 
 @dataclass
@@ -20,6 +19,12 @@ class MetaRow:
     units: str
     frequency: str
     transformation: str
+    indicator: str
+    region: str
+    series_id: str
+    transformation: str
+    frequency: str
+    units: str
     last_obs_date: str
     staleness_days: int
     missingness_pct: float

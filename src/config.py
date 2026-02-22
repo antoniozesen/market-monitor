@@ -37,41 +37,25 @@ FRED_CANDIDATES = {
 
 FRED_SEARCH = {
     "Europe": {
-        "growth": ["euro area industrial production monthly", "euro area oecd cli"],
-        "inflation": ["euro area cpi monthly", "euro area core inflation"],
-        "labor": ["euro area unemployment monthly"],
-        "leading": ["euro area leading indicator monthly", "euro area business confidence"],
-        "rates": ["euro area short term interest rate"],
+        "growth": ["euro area industrial production", "euro area oecd cli"],
+        "inflation": ["euro area cpi core", "euro area inflation"],
+        "labor": ["euro area unemployment rate"],
     },
     "Japan": {
-        "growth": ["japan industrial production monthly", "japan leading indicator"],
-        "inflation": ["japan cpi monthly"],
-        "labor": ["japan unemployment monthly"],
-        "leading": ["japan oecd cli"],
-        "rates": ["japan short term rate"],
+        "growth": ["japan industrial production", "japan oecd cli"],
+        "inflation": ["japan cpi"],
+        "labor": ["japan unemployment rate"],
     },
     "EM": {
-        "growth": ["emerging markets industrial production monthly"],
-        "inflation": ["emerging markets inflation monthly"],
+        "growth": ["emerging markets industrial production"],
+        "inflation": ["emerging markets inflation"],
     },
-}
-
-TRANSFORM_RULES = {
-    "growth": "level_yoy_z",
-    "inflation": "level_yoy_z",
-    "leading": "level_z_and_3m_change",
-    "labor": "rate_level_z_and_3m_12m_change",
-    "rates": "rate_level_z_and_3m_12m_change",
-    "conditions": "spread_or_index_level_z",
-    "stress": "spread_or_index_level_z",
 }
 
 @dataclass
 class Settings:
     stale_days: int = 60
-    severe_stale_days: int = 365
     min_obs_per_asset: int = 24
     min_rows_for_cov: int = 36
     min_assets_for_opt: int = 3
-    min_regime_months: int = 60
     prob_floor: float = 0.02

@@ -51,6 +51,7 @@ FRED_API_KEY="YOUR_KEY"
 - **Missing FRED series / stale macro**: app logs fallbacks in Data Dictionary and shows staleness warnings.
 - **yfinance timeouts**: app degrades gracefully and reports missing tickers.
 - **Regime unavailable**: app still renders and allocation falls back to anchor logic.
+- **Missing content diagnosis**: open **Data Quality** tab to see a checklist of missing macro/ticker/engine inputs and download `missing_checklist.csv` to share exactly what is missing.
 
 ## Data disclaimer
 For informational/internal research use only. Free sources can be delayed, revised, or incomplete.

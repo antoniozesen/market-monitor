@@ -8,7 +8,7 @@ import streamlit as st
 from src.config import Settings
 from src.data_fred import get_macro_library
 from src.data_yf import get_prices
-from src.diagnostics import panel_stats, stale_summary
+from src.diagnostics import missing_checklist, panel_stats, stale_summary
 from src.features import build_regime_features, regime_expected_returns
 from src.narrative import allocation_takeaways, banker_text, committee_text
 from src.plots import curve_schema, fig_curve, fig_heatmap
@@ -51,6 +51,10 @@ stress_z = float(features["stress_z"].dropna().iloc[-1]) if "stress_z" in featur
 alloc = optimize_weights(mret, mu_now, profile, flexibility, stress_z, regime_name)
 
 curve = curve_schema(macro)
+
+
+curve_available = not curve.empty and not curve[["2Y", "10Y"]].dropna(how="all").empty
+missing_items = missing_checklist(meta, yf_diag.get("missing_tickers", []), reg.get("available", False), curve_available)
 
 asof_etf = prices.index.max()
 asof_macro = macro.index.max() if not macro.empty else pd.NaT
@@ -201,6 +205,13 @@ with dict_tab:
     st.write(f"- ETF coverage table rows: {len(etf_cov)}.")
 
 with quality_tab:
+    st.subheader("Missing checklist (what you can pass me)")
+    st.dataframe(missing_items)
+    if not missing_items.empty:
+        miss = missing_items[missing_items["status"] == "MISSING"]
+        st.download_button("Download missing checklist CSV", miss.to_csv(index=False).encode(), "missing_checklist.csv", "text/csv")
+
+    st.subheader("Data quality diagnostics")
     st.json({
         "prices": panel_stats(prices),
         "monthly_returns": panel_stats(mret),
@@ -209,6 +220,7 @@ with quality_tab:
         "optimization_diag": alloc.get("diag", {}),
     })
     st.markdown("**Key takeaways**")
+    st.write(f"- Missing items currently detected: {int((missing_items['status']=='MISSING').sum()) if not missing_items.empty else 0}.")
     st.write(f"- Returns rows for risk: {mret.shape[0]}.")
     st.write(f"- Assets in optimization input: {alloc.get('diag',{}).get('assets',0)}.")
     st.write(f"- Dropped assets (<{cfg.min_obs_per_asset} months): {len(alloc.get('diag',{}).get('dropped_assets',[]))}.")
